@@ -14,6 +14,7 @@ from config import CONFIG
 from torch.optim import Adam
 from torch.optim.lr_scheduler import MultiStepLR
 import argparse
+import wandb
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch-size", default=8, type=int)
@@ -23,7 +24,14 @@ parser.add_argument("--lrd-gamma", default=0.1, type=float)
 parser.add_argument("--lrd-steps", nargs="*", default=[5000, 14000], type=int)
 parser.add_argument("--eval-interval", default=50, type=int)
 parser.add_argument("--save-interval", default=50, type=int)
+parser.add_argument("--wandb-api-key", default=None, type=str)
+parser.add_argument("--experiment-id", default="QKNorm")
 args = parser.parse_args()
+
+use_wandb = args.wandb_api_key is not None
+if use_wandb:
+    wandb.login(key=args.wandb_api_key)
+    wandb.init(project=args.experiment_id)
 
 print(args)
 
@@ -69,6 +77,7 @@ def validate(indices, batch_size):
     ppl = torch.exp(loss)
     print(f"Validation: Loss={loss}, PPL={ppl}")
     model.train()
+    return loss.item(), ppl.item()
 
 batches_per_update = effective_batch_size // batch_size
 optim = Adam(drop_in.GLOBALS.new_params, lr=1e-3)
@@ -94,12 +103,22 @@ for i, batch in enumerate(np.array_split(ft_indices, len(ft_indices) // batch_si
         optim.step()
         optim.zero_grad()
         scheduler.step()
-        print(f"{full_batch_i}: Loss={loss}, PPL={torch.exp(loss)}")
+        ppl = torch.exp(loss)
+        print(f"{full_batch_i}: Loss={loss}, PPL={ppl}")
         full_batch_i += 1
+
+        wandb.log(
+            {"loss": loss, "ppl": ppl},
+            step=full_batch_i,
+        )
         loss = 0
 
         if full_batch_i % batches_per_val == 0:
-            validate(val_indices, batch_size)
+            val_loss, val_ppl = validate(val_indices, batch_size)
+            wandb.log(
+                {"val_loss": val_loss, "val_ppl": val_ppl},
+                step=full_batch_i,
+            )
 
         if full_batch_i % save_interval == 0:
             print("saving model...")
