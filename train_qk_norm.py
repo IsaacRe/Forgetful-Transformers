@@ -1,47 +1,31 @@
-from tqdm.auto import tqdm
 from datasets import load_dataset
 import numpy as  np
 from transformers import GPT2Tokenizer
 import torch
-import torch.nn as nn
 import numpy as np
 from tqdm.auto import tqdm
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import transformers_drop_in as drop_in
-import tensor_util as tu
 from config import CONFIG
 from torch.optim import Adam
 from torch.optim.lr_scheduler import MultiStepLR
-import argparse
 import wandb
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--batch-size", default=8, type=int)
-parser.add_argument("--effective-batch-size", default=64, type=int)
-parser.add_argument("--lr", default=1e-3, type=float)
-parser.add_argument("--lrd-gamma", default=0.1, type=float)
-parser.add_argument("--lrd-steps", nargs="*", default=[5000, 14000], type=int)
-parser.add_argument("--eval-interval", default=50, type=int)
-parser.add_argument("--save-interval", default=50, type=int)
-parser.add_argument("--wandb-api-key", default=None, type=str)
-parser.add_argument("--experiment-id", default="QKNorm")
-args = parser.parse_args()
 
-use_wandb = args.wandb_api_key is not None
+use_wandb = CONFIG.wandb_api_key is not None
 if use_wandb:
-    wandb.login(key=args.wandb_api_key)
-    wandb.init(project=args.experiment_id)
+    wandb.login(key=CONFIG.wandb_api_key)
+    wandb.init(project=CONFIG.experiment_id)
 
-print(args)
+print(CONFIG)
 
-batch_size = args.batch_size
-effective_batch_size = args.effective_batch_size
+batch_size = CONFIG.batch_size
+effective_batch_size = CONFIG.effective_batch_size
 val_set_size = 512
-batches_per_val = args.eval_interval
-lrd_gamma = args.lrd_gamma
-lrd_steps = args.lrd_steps
-save_interval = args.save_interval
+batches_per_val = CONFIG.eval_interval
+lrd_gamma = CONFIG.lrd_gamma
+lrd_steps = CONFIG.lrd_steps
+save_interval = CONFIG.save_interval
 
 tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
 dataset = load_dataset('wikitext', 'wikitext-103-v1')
@@ -80,7 +64,8 @@ def validate(indices, batch_size):
     return loss.item(), ppl.item()
 
 batches_per_update = effective_batch_size // batch_size
-optim = Adam(drop_in.GLOBALS.new_params, lr=1e-3)
+train_params = drop_in.GLOBALS.new_params if CONFIG.scale_v else model.parameters()
+optim = Adam(train_params, lr=1e-3)
 scheduler = MultiStepLR(optim, gamma=lrd_gamma, milestones=lrd_steps)
 log_interval = 50
 loss = 0
@@ -107,18 +92,20 @@ for i, batch in enumerate(np.array_split(ft_indices, len(ft_indices) // batch_si
         print(f"{full_batch_i}: Loss={loss}, PPL={ppl}")
         full_batch_i += 1
 
-        wandb.log(
-            {"loss": loss, "ppl": ppl},
-            step=full_batch_i,
-        )
+        if CONFIG.wandb_api_key:
+            wandb.log(
+                {"loss": loss, "ppl": ppl},
+                step=full_batch_i,
+            )
         loss = 0
 
         if full_batch_i % batches_per_val == 0:
             val_loss, val_ppl = validate(val_indices, batch_size)
-            wandb.log(
-                {"val_loss": val_loss, "val_ppl": val_ppl},
-                step=full_batch_i,
-            )
+            if CONFIG.wandb_api_key:
+                wandb.log(
+                    {"val_loss": val_loss, "val_ppl": val_ppl},
+                    step=full_batch_i,
+                )
 
         if full_batch_i % save_interval == 0:
             print("saving model...")

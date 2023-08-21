@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 import transformers.models.gpt2.modeling_gpt2 as modeling_gpt2
-from transformers.pytorch_utils import Conv1D
 from config import CONFIG
 
 # Overwritable functions for interacting with drop-in
@@ -50,8 +49,10 @@ class ScaleHead(nn.Module):
 class GPT2AttentionDropIn(GPT2Attention):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
         super().__init__(config, is_cross_attention, layer_idx)
-        self.scale_v = ScaleHead(self.num_heads, self.embed_dim)  # scaling factor per v
-        GLOBALS.new_params.extend(self.scale_v.parameters())
+        if CONFIG.scale_v:
+            print("Training scale factor function per value vector")
+            self.scale_v = ScaleHead(self.num_heads, self.embed_dim)  # scaling factor per v
+            GLOBALS.new_params.extend(self.scale_v.parameters())
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
         """Shapes:
@@ -144,9 +145,9 @@ class GPT2AttentionDropIn(GPT2Attention):
 
         # (batch, head, seq_length, head_features)
 
-        v_scale = self.scale_v(hidden_states).permute(0, 2, 1).unsqueeze(-1)
-        #GLOBALS.outputs += [(hidden_states, self.scale_v)]
-        value = value * v_scale
+        if CONFIG.scale_v:
+            v_scale = self.scale_v(hidden_states).permute(0, 2, 1).unsqueeze(-1)
+            value = value * v_scale
 
         #######################
 
