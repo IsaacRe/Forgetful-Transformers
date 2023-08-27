@@ -11,7 +11,7 @@ def consolidate_kv(key, value):
     return key, value
 
 
-def record_attn_vars(query, key, value, attn_weights):
+def record_attn_vars(layer_idx, query, key, value, unnormalized_attn, final_attn):
     pass
 
 
@@ -19,6 +19,7 @@ class Globals:
     def __init__(self):
         self.new_params = []
         self.outputs = []
+        self.attention_svd = 0
 
 # From huggingface
 
@@ -70,10 +71,7 @@ class GPT2AttentionDropIn(GPT2Attention):
 
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
-        ############################
-        # record data for analysis #
-        record_attn_vars(query, key, value, attn_weights)
-        ############################
+        unnormalized_attn = attn_weights.clone()
 
         if self.scale_attn_weights:
             attn_weights = attn_weights / torch.full(
@@ -108,7 +106,23 @@ class GPT2AttentionDropIn(GPT2Attention):
         if head_mask is not None:
             attn_weights = attn_weights * head_mask
 
+        ############################
+        if GLOBALS.attention_svd > 0:
+            s_, v_, d_ = torch.svd(attn_weights)
+            attn_weights = s_[...,:GLOBALS.attention_svd] @ \
+                torch.diag_embed(
+                    v_[...,:GLOBALS.attention_svd].reshape(-1, GLOBALS.attention_svd)
+                ).reshape(*
+                    s_.shape[:-2], GLOBALS.attention_svd, GLOBALS.attention_svd
+                ) @ d_[...,:GLOBALS.attention_svd].transpose(-1, -2)
+        ############################
+
         attn_output = torch.matmul(attn_weights, value)
+
+        ############################
+        # record data for analysis #
+        record_attn_vars(self.layer_idx, query, key, value, unnormalized_attn, attn_weights)
+        ############################
 
         return attn_output, attn_weights
 

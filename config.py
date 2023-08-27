@@ -32,7 +32,7 @@ parser.add_argument("--save-interval", default=50, type=int)
 parser.add_argument("--wandb-api-key", default=None, type=str)
 parser.add_argument("--experiment-id", default="QKNorm")
 parser.add_argument("--scale-v", action="store_true")
-args = parser.parse_args()
+args, _ = parser.parse_known_args()
 
 CONFIG = Config(
     batch_size=args.batch_size,
