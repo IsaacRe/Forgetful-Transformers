@@ -4,6 +4,7 @@ import torch.nn as nn
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 import transformers.models.gpt2.modeling_gpt2 as modeling_gpt2
 from config import CONFIG
+from performer_pytorch.performer_pytorch import causal_linear_attention_noncuda
 
 # Overwritable functions for interacting with drop-in
 
@@ -11,7 +12,7 @@ def consolidate_kv(key, value):
     return key, value
 
 
-def record_attn_vars(layer_idx, query, key, value, unnormalized_attn, final_attn):
+def record_attn_vars(layer_idx, query, key, value, unnormalized_attn, final_attn, attn_output, attn_mask):
     pass
 
 
@@ -20,6 +21,8 @@ class Globals:
         self.new_params = []
         self.outputs = []
         self.attention_svd = 0
+        self.efficient_attn = False
+        self.scaling_enabled = True
 
 # From huggingface
 
@@ -73,13 +76,13 @@ class GPT2AttentionDropIn(GPT2Attention):
 
         unnormalized_attn = attn_weights.clone()
 
-        if self.scale_attn_weights:
+        if self.scale_attn_weights and GLOBALS.scaling_enabled:
             attn_weights = attn_weights / torch.full(
                 [], value.size(-1) ** 0.5, dtype=attn_weights.dtype, device=attn_weights.device
             )
 
         # Layer-wise attention scaling
-        if self.scale_attn_by_inverse_layer_idx:
+        if self.scale_attn_by_inverse_layer_idx and GLOBALS.scaling_enabled:
             attn_weights = attn_weights / float(self.layer_idx + 1)
 
         if not self.is_cross_attention:
@@ -103,10 +106,12 @@ class GPT2AttentionDropIn(GPT2Attention):
         attn_weights = self.attn_dropout(attn_weights)
 
         # Mask heads if we want to
+        assert head_mask is None
         if head_mask is not None:
             attn_weights = attn_weights * head_mask
 
         ############################
+        # attention approximations #
         if GLOBALS.attention_svd > 0:
             s_, v_, d_ = torch.svd(attn_weights)
             attn_weights = s_[...,:GLOBALS.attention_svd] @ \
@@ -115,13 +120,18 @@ class GPT2AttentionDropIn(GPT2Attention):
                 ).reshape(*
                     s_.shape[:-2], GLOBALS.attention_svd, GLOBALS.attention_svd
                 ) @ d_[...,:GLOBALS.attention_svd].transpose(-1, -2)
+            attn_output = torch.matmul(attn_weights, value) 
+        elif GLOBALS.efficient_attn:
+            q = nn.functional.softmax(query, dim=1)
+            k = torch.exp(key)
+            attn_output = causal_linear_attention_noncuda(q, k, value)
         ############################
-
-        attn_output = torch.matmul(attn_weights, value)
+        else:
+            attn_output = torch.matmul(attn_weights, value)
 
         ############################
         # record data for analysis #
-        record_attn_vars(self.layer_idx, query, key, value, unnormalized_attn, attn_weights)
+        record_attn_vars(self.layer_idx, query, key, value, unnormalized_attn, attn_weights, attn_output, attention_mask)
         ############################
 
         return attn_output, attn_weights
