@@ -8,7 +8,7 @@ from performer_pytorch.performer_pytorch import causal_linear_attention_noncuda
 
 # Overwritable functions for interacting with drop-in
 
-def consolidate_kv(key, value):
+def consolidate_kv(layer_idx, key, value):
     return key, value
 
 
