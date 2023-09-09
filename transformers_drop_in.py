@@ -69,7 +69,7 @@ class GPT2AttentionDropIn(GPT2Attention):
         ############################
         # consolidate kv cache #####
         if CONFIG.do_consolidate:
-            key, value = consolidate_kv(key, value)
+            key, value = consolidate_kv(self.layer_idx, key, value)
         ############################
 
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
