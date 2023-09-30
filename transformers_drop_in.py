@@ -81,9 +81,9 @@ class GPT2AttentionDropIn(GPT2Attention):
                 [], value.size(-1) ** 0.5, dtype=attn_weights.dtype, device=attn_weights.device
             )
 
-        # Layer-wise attention scaling
-        if self.scale_attn_by_inverse_layer_idx and GLOBALS.scaling_enabled:
-            attn_weights = attn_weights / float(self.layer_idx + 1)
+        # # Layer-wise attention scaling (not used by default)
+        # if self.scale_attn_by_inverse_layer_idx and GLOBALS.scaling_enabled:
+        #     attn_weights = attn_weights / float(self.layer_idx + 1)
 
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
