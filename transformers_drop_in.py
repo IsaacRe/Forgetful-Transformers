@@ -21,6 +21,7 @@ class Globals:
         self.new_params = []
         self.outputs = []
         self.attention_svd = 0
+        self.attention_svd_causal = True
         self.efficient_attn = False
         self.scaling_enabled = True
 
@@ -113,14 +114,34 @@ class GPT2AttentionDropIn(GPT2Attention):
         ############################
         # attention approximations #
         if GLOBALS.attention_svd > 0:
-            s_, v_, d_ = torch.svd(attn_weights)
-            attn_weights = s_[...,:GLOBALS.attention_svd] @ \
-                torch.diag_embed(
-                    v_[...,:GLOBALS.attention_svd].reshape(-1, GLOBALS.attention_svd)
-                ).reshape(*
-                    s_.shape[:-2], GLOBALS.attention_svd, GLOBALS.attention_svd
-                ) @ d_[...,:GLOBALS.attention_svd].transpose(-1, -2)
-            attn_output = torch.matmul(attn_weights, value) 
+            if GLOBALS.attention_svd_causal:
+                s_, v_, d_ = torch.svd(attn_weights)
+                attn_weights = s_[...,:GLOBALS.attention_svd] @ \
+                    torch.diag_embed(
+                        v_[...,:GLOBALS.attention_svd].reshape(-1, GLOBALS.attention_svd)
+                    ).reshape(*
+                        s_.shape[:-2], GLOBALS.attention_svd, GLOBALS.attention_svd
+                    ) @ d_[...,:GLOBALS.attention_svd].transpose(-1, -2)
+                attn_output = torch.matmul(attn_weights, value)
+            else:
+                unmasked_attn = unnormalized_attn / torch.full(
+                    [], value.size(-1) ** 0.5, dtype=unnormalized_attn.dtype, device=unnormalized_attn.device
+                )
+                unmasked_attn = unmasked_attn.softmax(dim=-1)
+                s_, v_, d_ = torch.svd(unmasked_attn)
+                attn_weights = s_[...,:GLOBALS.attention_svd] @ \
+                    torch.diag_embed(
+                        v_[...,:GLOBALS.attention_svd].reshape(-1, GLOBALS.attention_svd)
+                    ).reshape(*
+                        s_.shape[:-2], GLOBALS.attention_svd, GLOBALS.attention_svd
+                    ) @ d_[...,:GLOBALS.attention_svd].transpose(-1, -2)
+                attn_weights = torch.tril(attn_weights)
+                # set all-zero attn_weight rows to uniform
+                all_zero = (attn_weights == 0).all(dim=-1)
+                attn_weights[all_zero] = 1
+                attn_weights = torch.tril(attn_weights)
+                attn_weights = attn_weights / attn_weights.sum(dim=-1).unsqueeze(-1)
+                attn_output = torch.matmul(attn_weights, value)
         elif GLOBALS.efficient_attn:
             q = nn.functional.softmax(query, dim=1)
             k = torch.exp(key)
